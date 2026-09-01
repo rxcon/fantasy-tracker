@@ -4,6 +4,13 @@ import { useEffect, useState } from "react";
 import { ChevronDown, ChevronUp, Loader2 } from "lucide-react";
 import type { OpponentInfo, RosterPlayer, RosterResponse } from "@/utils/types";
 
+// ESPN's live "possessionText" reads like "1st & 10 at NE 14" — pull just
+// the trailing "team yard-line" part off the end for a compact badge.
+function redZoneLabel(situationText?: string): string {
+  const match = situationText?.match(/at\s+([A-Z]{2,3}\s?\d{1,2})\s*$/i);
+  return match ? `Red Zone · ${match[1]}` : "Red Zone";
+}
+
 export default function RosterBreakdown({ leagueRowId }: { leagueRowId: string }) {
   const [open, setOpen] = useState(true);
   const [loading, setLoading] = useState(false);
@@ -168,13 +175,17 @@ function HeadToHead({
         const theirs = oppStarters[i];
         const slotLabel = mine?.slot ?? theirs?.slot ?? "-";
         const mineHigher = (mine?.points ?? 0) >= (theirs?.points ?? 0);
+        const eitherInRedZone = Boolean(mine?.liveStatus?.isRedZone || theirs?.liveStatus?.isRedZone);
 
         return (
           <div
             key={i}
-            className="grid grid-cols-[1fr_auto_1fr] items-center gap-2 rounded-md bg-field-950/60 px-2 py-1.5"
+            className={`grid grid-cols-[1fr_auto_1fr] items-center gap-2 rounded-md bg-field-950/60 px-2 py-1.5 ${
+              eitherInRedZone ? "redzone-glow" : ""
+            }`}
           >
             <div className="flex items-center justify-end gap-2 truncate text-right">
+              {mine?.liveStatus?.isRedZone && <span className="shrink-0 text-xs">⚡</span>}
               <span className="truncate text-xs text-chalk-100">
                 {mine?.name ?? "—"}
               </span>
@@ -200,6 +211,7 @@ function HeadToHead({
               <span className="truncate text-xs text-chalk-100">
                 {theirs?.name ?? "—"}
               </span>
+              {theirs?.liveStatus?.isRedZone && <span className="shrink-0 text-xs">⚡</span>}
             </div>
           </div>
         );
@@ -215,23 +227,33 @@ function PlayerGroup({ label, players }: { label: string; players: RosterPlayer[
         {label}
       </p>
       <div className="space-y-1">
-        {players.map((p) => (
-          <div
-            key={p.playerId}
-            className="flex items-center justify-between rounded-md bg-field-950/60 px-2.5 py-1.5 text-sm"
-          >
-            <div className="flex items-center gap-2 truncate">
-              <span className="w-10 shrink-0 text-[11px] font-semibold text-chalk-500">
-                {p.slot}
+        {players.map((p) => {
+          const inRedZone = Boolean(p.liveStatus?.isRedZone);
+          return (
+            <div
+              key={p.playerId}
+              className={`flex items-center justify-between rounded-md bg-field-950/60 px-2.5 py-1.5 text-sm ${
+                inRedZone ? "redzone-glow" : ""
+              }`}
+            >
+              <div className="flex min-w-0 items-center gap-2 truncate">
+                <span className="w-10 shrink-0 text-[11px] font-semibold text-chalk-500">
+                  {p.slot}
+                </span>
+                <span className="truncate text-chalk-100">{p.name}</span>
+                <span className="shrink-0 text-xs text-chalk-500">{p.proTeam}</span>
+                {inRedZone && (
+                  <span className="shrink-0 rounded-full bg-lights-500/15 px-1.5 py-0.5 text-[10px] font-bold text-lights-400">
+                    ⚡ {redZoneLabel(p.liveStatus?.situationText)}
+                  </span>
+                )}
+              </div>
+              <span className="shrink-0 font-display text-lg text-lights-500">
+                {p.points.toFixed(1)}
               </span>
-              <span className="truncate text-chalk-100">{p.name}</span>
-              <span className="shrink-0 text-xs text-chalk-500">{p.proTeam}</span>
             </div>
-            <span className="shrink-0 font-display text-lg text-lights-500">
-              {p.points.toFixed(1)}
-            </span>
-          </div>
-        ))}
+          );
+        })}
       </div>
     </div>
   );
