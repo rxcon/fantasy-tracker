@@ -29,6 +29,18 @@ export type RosterPlayer = {
   slot: string;
 };
 
+export type OpponentInfo = {
+  teamName: string;
+  totalPoints: number;
+  players: RosterPlayer[];
+} | null;
+
 export type RosterResponse =
-  | { status: "ok"; week: number; players: RosterPlayer[] }
+  | {
+      status: "ok";
+      week: number;
+      myPoints: number;
+      players: RosterPlayer[];
+      opponent: OpponentInfo;
+    }
   | { status: "error"; errorMessage: string };
