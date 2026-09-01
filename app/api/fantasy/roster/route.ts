@@ -8,7 +8,7 @@ import {
   ESPN_SLOT_SORT_ORDER,
   sleeperPositionSortValue,
 } from "@/utils/nflMappings";
-import type { OpponentInfo, RosterPlayer, RosterResponse } from "@/utils/types";
+import type { LiveTeamStatus, OpponentInfo, RosterPlayer, RosterResponse } from "@/utils/types";
 
 export const dynamic = "force-dynamic";
 
@@ -21,11 +21,63 @@ function sumStarterPoints(players: RosterPlayer[]): number {
   );
 }
 
+// ESPN's public scoreboard feed (separate from the fantasy API, no auth
+// needed) carries live drive situation per game, including whether the
+// team currently possessing the ball is inside the red zone. We fetch
+// it once per request and key it by team abbreviation so every player
+// on that team can be flagged, regardless of platform.
+async function getLiveTeamStatus(): Promise<Record<string, LiveTeamStatus>> {
+  const map: Record<string, LiveTeamStatus> = {};
+  try {
+    const res = await fetch(
+      "https://site.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard",
+      // Live data — cache briefly so simultaneous card loads share one
+      // fetch, without going stale during an actively moving game.
+      { next: { revalidate: 15 } }
+    );
+    if (!res.ok) return map;
+
+    const data = await res.json();
+    const events = Array.isArray(data?.events) ? data.events : [];
+
+    for (const event of events) {
+      const comp = event?.competitions?.[0];
+      if (!comp) continue;
+
+      const state: LiveTeamStatus["state"] = comp?.status?.type?.state ?? "pre";
+      const situation = comp?.situation;
+      const possessionTeamId = situation?.possession;
+      const isRedZone = Boolean(situation?.isRedZone);
+      const competitors = Array.isArray(comp?.competitors) ? comp.competitors : [];
+
+      for (const c of competitors) {
+        const abbr = c?.team?.abbreviation;
+        if (!abbr) continue;
+
+        const hasPossession =
+          possessionTeamId != null && String(c?.team?.id) === String(possessionTeamId);
+
+        map[abbr] = {
+          state,
+          hasPossession,
+          isRedZone: hasPossession && isRedZone,
+          situationText: situation?.possessionText ?? undefined,
+        };
+      }
+    }
+  } catch {
+    // Live status is a nice-to-have — if ESPN's scoreboard is unreachable,
+    // just skip it rather than failing the whole roster response.
+  }
+  return map;
+}
+
 function buildSleeperPlayers(
   playerIds: string[],
   starterIds: string[],
   pointsMap: Record<string, number>,
-  playersMeta: any
+  playersMeta: any,
+  liveMap: Record<string, LiveTeamStatus>
 ): RosterPlayer[] {
   const starterSet = new Set(starterIds);
   const list: RosterPlayer[] = playerIds.map((id) => {
@@ -34,14 +86,16 @@ function buildSleeperPlayers(
     const name = meta
       ? `${meta.first_name ?? ""} ${meta.last_name ?? ""}`.trim()
       : "";
+    const proTeam = meta?.team ?? "FA";
     return {
       playerId: id,
       name: name || id,
       position: meta?.position ?? "-",
-      proTeam: meta?.team ?? "FA",
+      proTeam,
       points: Number((pointsMap[id] ?? 0).toFixed(2)),
       isStarter,
       slot: isStarter ? meta?.position ?? "-" : "Bench",
+      liveStatus: liveMap[proTeam],
     };
   });
 
@@ -59,7 +113,8 @@ function buildSleeperPlayers(
 async function getSleeperMatchup(
   leagueId: string,
   sleeperUsername: string | null,
-  requestedWeek: number | null
+  requestedWeek: number | null,
+  liveMap: Record<string, LiveTeamStatus>
 ): Promise<RosterResponse> {
   if (!sleeperUsername) {
     return { status: "error", errorMessage: "No Sleeper username saved for this league." };
@@ -120,7 +175,8 @@ async function getSleeperMatchup(
     myRoster.players ?? [],
     myMatchup?.starters ?? myRoster.starters ?? [],
     myMatchup?.players_points ?? {},
-    players
+    players,
+    liveMap
   );
 
   let opponent: OpponentInfo = null;
@@ -138,7 +194,8 @@ async function getSleeperMatchup(
           oppRoster.players ?? [],
           oppMatchup.starters ?? [],
           oppMatchup.players_points ?? {},
-          players
+          players,
+          liveMap
         );
 
         let teamName = "Opponent";
@@ -168,7 +225,11 @@ async function getSleeperMatchup(
   };
 }
 
-function buildEspnPlayers(entries: any[], week: number): RosterPlayer[] {
+function buildEspnPlayers(
+  entries: any[],
+  week: number,
+  liveMap: Record<string, LiveTeamStatus>
+): RosterPlayer[] {
   const withSlot = entries.map((entry: any) => {
     const player = entry?.playerPoolEntry?.player;
     const slotId = entry?.lineupSlotId;
@@ -178,14 +239,17 @@ function buildEspnPlayers(entries: any[], week: number): RosterPlayer[] {
       ? player.stats.find((s: any) => s.scoringPeriodId === week && s.statSourceId === 0)
       : null;
 
+    const proTeam = ESPN_PRO_TEAM[player?.proTeamId] ?? "FA";
+
     const rp: RosterPlayer = {
       playerId: String(player?.id ?? entry?.playerId ?? ""),
       name: player?.fullName ?? "Unknown player",
       position: ESPN_POSITION[player?.defaultPositionId] ?? "-",
-      proTeam: ESPN_PRO_TEAM[player?.proTeamId] ?? "FA",
+      proTeam,
       points: Number((statLine?.appliedTotal ?? 0).toFixed(2)),
       isStarter,
       slot: ESPN_LINEUP_SLOT[slotId] ?? (isStarter ? "FLEX" : "Bench"),
+      liveStatus: liveMap[proTeam],
     };
 
     return { slotId, isStarter, rp };
@@ -207,7 +271,8 @@ async function getEspnMatchup(
   season: string,
   espnSwid: string | null,
   espnS2: string | null,
-  requestedWeek: number | null
+  requestedWeek: number | null,
+  liveMap: Record<string, LiveTeamStatus>
 ): Promise<RosterResponse> {
   const headers: Record<string, string> = {};
   let normalizedSwid: string | null = null;
@@ -255,7 +320,7 @@ async function getEspnMatchup(
     return { status: "error", errorMessage: "No teams found for this ESPN league." };
   }
 
-  const myPlayers = buildEspnPlayers(myTeam?.roster?.entries ?? [], week);
+  const myPlayers = buildEspnPlayers(myTeam?.roster?.entries ?? [], week, liveMap);
 
   let opponent: OpponentInfo = null;
 
@@ -275,7 +340,7 @@ async function getEspnMatchup(
     if (oppTeamId != null) {
       const oppTeam = teams.find((t: any) => t.id === oppTeamId);
       if (oppTeam) {
-        const oppPlayers = buildEspnPlayers(oppTeam?.roster?.entries ?? [], week);
+        const oppPlayers = buildEspnPlayers(oppTeam?.roster?.entries ?? [], week, liveMap);
         const teamName =
           oppTeam?.name ||
           `${oppTeam?.location ?? ""} ${oppTeam?.nickname ?? ""}`.trim() ||
@@ -329,15 +394,18 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "League not found." }, { status: 404 });
   }
 
+  const liveMap = await getLiveTeamStatus();
+
   const result =
     row.platform === "sleeper"
-      ? await getSleeperMatchup(row.league_id, row.sleeper_username, requestedWeek)
+      ? await getSleeperMatchup(row.league_id, row.sleeper_username, requestedWeek, liveMap)
       : await getEspnMatchup(
           row.league_id,
           row.season,
           row.espn_swid,
           row.espn_s2,
-          requestedWeek
+          requestedWeek,
+          liveMap
         );
 
   return NextResponse.json(result);
