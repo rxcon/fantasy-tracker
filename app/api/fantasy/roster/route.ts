@@ -8,11 +8,55 @@ import {
   ESPN_SLOT_SORT_ORDER,
   sleeperPositionSortValue,
 } from "@/utils/nflMappings";
-import type { RosterPlayer, RosterResponse } from "@/utils/types";
+import type { OpponentInfo, RosterPlayer, RosterResponse } from "@/utils/types";
 
 export const dynamic = "force-dynamic";
 
-async function getSleeperRoster(
+function sumStarterPoints(players: RosterPlayer[]): number {
+  return Number(
+    players
+      .filter((p) => p.isStarter)
+      .reduce((total, p) => total + p.points, 0)
+      .toFixed(2)
+  );
+}
+
+function buildSleeperPlayers(
+  playerIds: string[],
+  starterIds: string[],
+  pointsMap: Record<string, number>,
+  playersMeta: any
+): RosterPlayer[] {
+  const starterSet = new Set(starterIds);
+  const list: RosterPlayer[] = playerIds.map((id) => {
+    const meta = playersMeta?.[id];
+    const isStarter = starterSet.has(id);
+    const name = meta
+      ? `${meta.first_name ?? ""} ${meta.last_name ?? ""}`.trim()
+      : "";
+    return {
+      playerId: id,
+      name: name || id,
+      position: meta?.position ?? "-",
+      proTeam: meta?.team ?? "FA",
+      points: Number((pointsMap[id] ?? 0).toFixed(2)),
+      isStarter,
+      slot: isStarter ? meta?.position ?? "-" : "Bench",
+    };
+  });
+
+  list.sort((a, b) => {
+    if (a.isStarter !== b.isStarter) return a.isStarter ? -1 : 1;
+    if (a.isStarter) {
+      return sleeperPositionSortValue(a.position) - sleeperPositionSortValue(b.position);
+    }
+    return b.points - a.points;
+  });
+
+  return list;
+}
+
+async function getSleeperMatchup(
   leagueId: string,
   sleeperUsername: string | null,
   requestedWeek: number | null
@@ -38,7 +82,7 @@ async function getSleeperRoster(
     week = stateRes.ok ? (await stateRes.json())?.week ?? 1 : 1;
   }
 
-  const [rostersRes, matchupsRes, playersRes] = await Promise.all([
+  const [rostersRes, matchupsRes, playersRes, usersRes] = await Promise.all([
     fetch(`https://api.sleeper.app/v1/league/${leagueId}/rosters`),
     fetch(`https://api.sleeper.app/v1/league/${leagueId}/matchups/${week}`),
     // Sleeper's full player database rarely changes — cache it for a day
@@ -46,6 +90,7 @@ async function getSleeperRoster(
     fetch("https://api.sleeper.app/v1/players/nfl", {
       next: { revalidate: 86400 },
     }),
+    fetch(`https://api.sleeper.app/v1/league/${leagueId}/users`),
   ]);
 
   if (!rostersRes.ok || !playersRes.ok) {
@@ -62,49 +107,102 @@ async function getSleeperRoster(
     return { status: "error", errorMessage: "Couldn't find your roster in this league." };
   }
 
-  let playersPoints: Record<string, number> = {};
-  let starterIds: string[] = myRoster.starters ?? [];
-
+  let matchups: any[] = [];
   if (matchupsRes.ok) {
-    const matchups = await matchupsRes.json();
-    const myMatchup = Array.isArray(matchups)
-      ? matchups.find((m: any) => m.roster_id === myRoster.roster_id)
-      : null;
-    if (myMatchup) {
-      playersPoints = myMatchup.players_points ?? {};
-      starterIds = myMatchup.starters ?? starterIds;
+    matchups = await matchupsRes.json();
+  }
+
+  const myMatchup = Array.isArray(matchups)
+    ? matchups.find((m: any) => m.roster_id === myRoster.roster_id)
+    : null;
+
+  const myPlayers = buildSleeperPlayers(
+    myRoster.players ?? [],
+    myMatchup?.starters ?? myRoster.starters ?? [],
+    myMatchup?.players_points ?? {},
+    players
+  );
+
+  let opponent: OpponentInfo = null;
+
+  if (myMatchup?.matchup_id != null) {
+    const oppMatchup = matchups.find(
+      (m: any) => m.matchup_id === myMatchup.matchup_id && m.roster_id !== myRoster.roster_id
+    );
+    if (oppMatchup) {
+      const oppRoster = Array.isArray(rosters)
+        ? rosters.find((r: any) => r.roster_id === oppMatchup.roster_id)
+        : null;
+      if (oppRoster) {
+        const oppPlayers = buildSleeperPlayers(
+          oppRoster.players ?? [],
+          oppMatchup.starters ?? [],
+          oppMatchup.players_points ?? {},
+          players
+        );
+
+        let teamName = "Opponent";
+        if (usersRes.ok) {
+          const users = await usersRes.json();
+          const oppUser = Array.isArray(users)
+            ? users.find((u: any) => u.user_id === oppRoster.owner_id)
+            : null;
+          teamName = oppUser?.metadata?.team_name || oppUser?.display_name || "Opponent";
+        }
+
+        opponent = {
+          teamName,
+          totalPoints: sumStarterPoints(oppPlayers),
+          players: oppPlayers,
+        };
+      }
     }
   }
 
-  const allPlayerIds: string[] = myRoster.players ?? [];
-  const starterSet = new Set(starterIds);
-
-  const roster: RosterPlayer[] = allPlayerIds.map((playerId) => {
-    const meta = players?.[playerId];
-    const isStarter = starterSet.has(playerId);
-    return {
-      playerId,
-      name: meta ? `${meta.first_name ?? ""} ${meta.last_name ?? ""}`.trim() : playerId,
-      position: meta?.position ?? "-",
-      proTeam: meta?.team ?? "FA",
-      points: Number((playersPoints[playerId] ?? 0).toFixed(2)),
-      isStarter,
-      slot: isStarter ? meta?.position ?? "-" : "Bench",
-    };
-  });
-
-  roster.sort((a, b) => {
-    if (a.isStarter !== b.isStarter) return a.isStarter ? -1 : 1;
-    if (a.isStarter) {
-      return sleeperPositionSortValue(a.position) - sleeperPositionSortValue(b.position);
-    }
-    return b.points - a.points;
-  });
-
-  return { status: "ok", week: week ?? 1, players: roster };
+  return {
+    status: "ok",
+    week: week ?? 1,
+    myPoints: sumStarterPoints(myPlayers),
+    players: myPlayers,
+    opponent,
+  };
 }
 
-async function getEspnRoster(
+function buildEspnPlayers(entries: any[], week: number): RosterPlayer[] {
+  const withSlot = entries.map((entry: any) => {
+    const player = entry?.playerPoolEntry?.player;
+    const slotId = entry?.lineupSlotId;
+    const isStarter = slotId !== 20 && slotId !== 21;
+
+    const statLine = Array.isArray(player?.stats)
+      ? player.stats.find((s: any) => s.scoringPeriodId === week && s.statSourceId === 0)
+      : null;
+
+    const rp: RosterPlayer = {
+      playerId: String(player?.id ?? entry?.playerId ?? ""),
+      name: player?.fullName ?? "Unknown player",
+      position: ESPN_POSITION[player?.defaultPositionId] ?? "-",
+      proTeam: ESPN_PRO_TEAM[player?.proTeamId] ?? "FA",
+      points: Number((statLine?.appliedTotal ?? 0).toFixed(2)),
+      isStarter,
+      slot: ESPN_LINEUP_SLOT[slotId] ?? (isStarter ? "FLEX" : "Bench"),
+    };
+
+    return { slotId, isStarter, rp };
+  });
+
+  withSlot.sort((a, b) => {
+    if (a.isStarter !== b.isStarter) return a.isStarter ? -1 : 1;
+    if (a.isStarter) {
+      return (ESPN_SLOT_SORT_ORDER[a.slotId] ?? 9) - (ESPN_SLOT_SORT_ORDER[b.slotId] ?? 9);
+    }
+    return b.rp.points - a.rp.points;
+  });
+
+  return withSlot.map((w) => w.rp);
+}
+
+async function getEspnMatchup(
   leagueId: string,
   season: string,
   espnSwid: string | null,
@@ -122,7 +220,9 @@ async function getEspnRoster(
   }
 
   const periodParam = requestedWeek ? `&scoringPeriodId=${requestedWeek}` : "";
-  const url = `https://lm-api-reads.fantasy.espn.com/apis/v3/games/ffl/seasons/${season}/segments/0/leagues/${leagueId}?view=mRoster&view=mMatchupScore&view=mTeam${periodParam}`;
+  // mMatchup adds the weekly schedule (data.schedule), which is how we
+  // figure out who the opponent is for the requested week.
+  const url = `https://lm-api-reads.fantasy.espn.com/apis/v3/games/ffl/seasons/${season}/segments/0/leagues/${leagueId}?view=mRoster&view=mMatchupScore&view=mMatchup&view=mTeam${periodParam}`;
 
   const res = await fetch(url, { headers });
 
@@ -155,36 +255,48 @@ async function getEspnRoster(
     return { status: "error", errorMessage: "No teams found for this ESPN league." };
   }
 
-  const entries = Array.isArray(myTeam?.roster?.entries) ? myTeam.roster.entries : [];
+  const myPlayers = buildEspnPlayers(myTeam?.roster?.entries ?? [], week);
 
-  const roster: RosterPlayer[] = entries.map((entry: any) => {
-    const player = entry?.playerPoolEntry?.player;
-    const slotId = entry?.lineupSlotId;
-    const isStarter = slotId !== 20 && slotId !== 21;
+  let opponent: OpponentInfo = null;
 
-    const statLine = Array.isArray(player?.stats)
-      ? player.stats.find(
-          (s: any) => s.scoringPeriodId === week && s.statSourceId === 0
-        )
-      : null;
+  const schedule = Array.isArray(data?.schedule) ? data.schedule : [];
+  const matchupEntry = schedule.find(
+    (s: any) =>
+      s.matchupPeriodId === week &&
+      (s.home?.teamId === myTeam.id || s.away?.teamId === myTeam.id)
+  );
 
-    return {
-      playerId: String(player?.id ?? entry?.playerId ?? ""),
-      name: player?.fullName ?? "Unknown player",
-      position: ESPN_POSITION[player?.defaultPositionId] ?? "-",
-      proTeam: ESPN_PRO_TEAM[player?.proTeamId] ?? "FA",
-      points: Number((statLine?.appliedTotal ?? 0).toFixed(2)),
-      isStarter,
-      slot: ESPN_LINEUP_SLOT[slotId] ?? (isStarter ? "FLEX" : "Bench"),
-    };
-  });
+  if (matchupEntry) {
+    const oppTeamId =
+      matchupEntry.home?.teamId === myTeam.id
+        ? matchupEntry.away?.teamId
+        : matchupEntry.home?.teamId;
 
-  roster.sort((a: RosterPlayer, b: RosterPlayer) => {
-    if (a.isStarter !== b.isStarter) return a.isStarter ? -1 : 1;
-    return b.points - a.points;
-  });
+    if (oppTeamId != null) {
+      const oppTeam = teams.find((t: any) => t.id === oppTeamId);
+      if (oppTeam) {
+        const oppPlayers = buildEspnPlayers(oppTeam?.roster?.entries ?? [], week);
+        const teamName =
+          oppTeam?.name ||
+          `${oppTeam?.location ?? ""} ${oppTeam?.nickname ?? ""}`.trim() ||
+          "Opponent";
 
-  return { status: "ok", week, players: roster };
+        opponent = {
+          teamName,
+          totalPoints: sumStarterPoints(oppPlayers),
+          players: oppPlayers,
+        };
+      }
+    }
+  }
+
+  return {
+    status: "ok",
+    week,
+    myPoints: sumStarterPoints(myPlayers),
+    players: myPlayers,
+    opponent,
+  };
 }
 
 export async function GET(request: NextRequest) {
@@ -219,8 +331,8 @@ export async function GET(request: NextRequest) {
 
   const result =
     row.platform === "sleeper"
-      ? await getSleeperRoster(row.league_id, row.sleeper_username, requestedWeek)
-      : await getEspnRoster(
+      ? await getSleeperMatchup(row.league_id, row.sleeper_username, requestedWeek)
+      : await getEspnMatchup(
           row.league_id,
           row.season,
           row.espn_swid,
