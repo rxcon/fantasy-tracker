@@ -2,6 +2,7 @@
 
 import { Trash2, TriangleAlert, RefreshCw } from "lucide-react";
 import type { TeamResult } from "@/utils/types";
+import RosterBreakdown from "./RosterBreakdown";
 
 export default function LeagueCard({
   result,
@@ -91,6 +92,8 @@ export default function LeagueCard({
           </p>
         </div>
       </div>
+
+      <RosterBreakdown leagueRowId={result.id} />
     </div>
   );
 }
