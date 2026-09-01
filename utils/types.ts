@@ -19,6 +19,14 @@ export type TeamResult =
       errorMessage: string;
     };
 
+export type LiveTeamStatus = {
+  // "pre" (not started), "in" (live), or "post" (final)
+  state: "pre" | "in" | "post";
+  hasPossession: boolean;
+  isRedZone: boolean;
+  situationText?: string;
+};
+
 export type RosterPlayer = {
   playerId: string;
   name: string;
@@ -27,6 +35,7 @@ export type RosterPlayer = {
   points: number;
   isStarter: boolean;
   slot: string;
+  liveStatus?: LiveTeamStatus;
 };
 
 export type OpponentInfo = {
