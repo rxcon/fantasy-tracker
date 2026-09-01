@@ -49,3 +49,18 @@ body {
     transparent 64px
   );
 }
+
+/* Glowing pulse for players whose real NFL team is currently driving
+   inside the 20. The existing prefers-reduced-motion rule above already
+   neutralizes this animation for anyone who needs that. */
+.redzone-glow {
+  animation: redzone-pulse 1.6s ease-in-out infinite;
+}
+@keyframes redzone-pulse {
+  0%, 100% {
+    box-shadow: 0 0 0 1px rgba(242, 164, 65, 0.5), 0 0 8px 1px rgba(242, 164, 65, 0.35);
+  }
+  50% {
+    box-shadow: 0 0 0 1px rgba(242, 164, 65, 0.9), 0 0 16px 4px rgba(242, 164, 65, 0.6);
+  }
+}
