@@ -1,8 +1,10 @@
 "use client";
 
+import { useState } from "react";
 import { Trash2, TriangleAlert, RefreshCw } from "lucide-react";
 import type { TeamResult } from "@/utils/types";
 import RosterBreakdown from "./RosterBreakdown";
+import ConfirmModal from "./ConfirmModal";
 
 export default function LeagueCard({
   result,
@@ -11,11 +13,32 @@ export default function LeagueCard({
   result: TeamResult;
   onDelete: (id: string) => void;
 }) {
+  const [confirmOpen, setConfirmOpen] = useState(false);
+
   const platformLabel = result.platform === "sleeper" ? "Sleeper" : "ESPN";
   const badgeClass =
     result.platform === "sleeper"
       ? "bg-sleeper/15 text-sleeper border-sleeper/30"
       : "bg-espn/15 text-red-400 border-espn/30";
+
+  function handleConfirmDelete() {
+    setConfirmOpen(false);
+    onDelete(result.id);
+  }
+
+  const confirmModal = confirmOpen && (
+    <ConfirmModal
+      title="Remove this league?"
+      message={
+        result.status === "ok"
+          ? `This will unlink "${result.leagueName}" from your dashboard. You can always add it back later.`
+          : "This will unlink the league from your dashboard. You can always add it back later."
+      }
+      confirmLabel="Remove"
+      onConfirm={handleConfirmDelete}
+      onCancel={() => setConfirmOpen(false)}
+    />
+  );
 
   if (result.status === "error") {
     return (
@@ -27,7 +50,7 @@ export default function LeagueCard({
             {platformLabel}
           </span>
           <button
-            onClick={() => onDelete(result.id)}
+            onClick={() => setConfirmOpen(true)}
             className="focus-ring rounded-md p-1 text-chalk-500 opacity-0 transition-opacity hover:text-red-400 group-hover:opacity-100"
             aria-label="Remove league"
           >
@@ -44,6 +67,8 @@ export default function LeagueCard({
         <p className="mt-3 text-xs text-chalk-500">
           League ID: {result.leagueId}
         </p>
+
+        {confirmModal}
       </div>
     );
   }
@@ -61,7 +86,7 @@ export default function LeagueCard({
           {platformLabel}
         </span>
         <button
-          onClick={() => onDelete(result.id)}
+          onClick={() => setConfirmOpen(true)}
           className="focus-ring rounded-md p-1 text-chalk-500 opacity-0 transition-opacity hover:text-red-400 group-hover:opacity-100"
           aria-label="Remove league"
         >
@@ -94,6 +119,8 @@ export default function LeagueCard({
       </div>
 
       <RosterBreakdown leagueRowId={result.id} />
+
+      {confirmModal}
     </div>
   );
 }
