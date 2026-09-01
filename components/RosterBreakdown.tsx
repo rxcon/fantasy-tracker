@@ -1,38 +1,49 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { ChevronDown, ChevronUp, Loader2 } from "lucide-react";
 import type { RosterPlayer, RosterResponse } from "@/utils/types";
 
 export default function RosterBreakdown({ leagueRowId }: { leagueRowId: string }) {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(true);
   const [loading, setLoading] = useState(false);
   const [loaded, setLoaded] = useState(false);
   const [week, setWeek] = useState<number | null>(null);
   const [players, setPlayers] = useState<RosterPlayer[]>([]);
   const [error, setError] = useState<string | null>(null);
 
-  async function handleToggle() {
+  async function loadRoster() {
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/fantasy/roster?id=${leagueRowId}`);
+      const body: RosterResponse = await res.json();
+      if (body.status === "ok") {
+        setWeek(body.week);
+        setPlayers(body.players);
+        setLoaded(true);
+      } else {
+        setError(body.errorMessage);
+      }
+    } catch {
+      setError("Couldn't load the player breakdown.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  // Expanded by default, so load the roster as soon as the card mounts
+  // rather than waiting for a click.
+  useEffect(() => {
+    loadRoster();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [leagueRowId]);
+
+  function handleToggle() {
     const next = !open;
     setOpen(next);
-    if (next && !loaded) {
-      setLoading(true);
-      setError(null);
-      try {
-        const res = await fetch(`/api/fantasy/roster?id=${leagueRowId}`);
-        const body: RosterResponse = await res.json();
-        if (body.status === "ok") {
-          setWeek(body.week);
-          setPlayers(body.players);
-          setLoaded(true);
-        } else {
-          setError(body.errorMessage);
-        }
-      } catch {
-        setError("Couldn't load the player breakdown.");
-      } finally {
-        setLoading(false);
-      }
+    if (next && !loaded && !loading) {
+      loadRoster();
     }
   }
 
