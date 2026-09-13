@@ -275,7 +275,7 @@ function PlayerGroup({ label, players }: { label: string; players: RosterPlayer[
                 <span className="truncate text-chalk-100">{p.name}</span>
                 <span className="shrink-0 text-xs text-chalk-500">{p.proTeam}</span>
                 {inRedZone && (
-                  <span className="shrink-0 rounded-full bg-lights-500/15 px-1.5 py-0.5 text-[10px] font-bold text-lights-400">
+                  <span className="shrink-0 rounded-full bg-red-500/15 px-1.5 py-0.5 text-[10px] font-bold text-red-400">
                     ⚡ {redZoneLabel(p.liveStatus?.situationText)}
                   </span>
                 )}
