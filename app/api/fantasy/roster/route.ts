@@ -21,6 +21,15 @@ function sumStarterPoints(players: RosterPlayer[]): number {
   );
 }
 
+function sumStarterProjected(players: RosterPlayer[]): number {
+  return Number(
+    players
+      .filter((p) => p.isStarter)
+      .reduce((total, p) => total + p.projectedPoints, 0)
+      .toFixed(2)
+  );
+}
+
 // ESPN's public scoreboard feed (separate from the fantasy API, no auth
 // needed) carries live drive situation per game, including whether the
 // team currently possessing the ball is inside the red zone. We fetch
@@ -72,12 +81,59 @@ async function getLiveTeamStatus(): Promise<Record<string, LiveTeamStatus>> {
   return map;
 }
 
+// Sleeper's projections endpoint is undocumented but stable and widely
+// used by community tools. It returns per-player projected stats for a
+// given season/week, either as an array of records or as a map keyed by
+// player_id depending on which mirror answers — we handle both shapes
+// and normalize into a simple player_id -> stats object map.
+async function getSleeperProjections(
+  season: string,
+  week: number
+): Promise<Record<string, any>> {
+  const map: Record<string, any> = {};
+  try {
+    const res = await fetch(
+      `https://api.sleeper.app/projections/nfl/${season}/${week}?season_type=regular`,
+      { next: { revalidate: 300 } }
+    );
+    if (!res.ok) return map;
+    const raw = await res.json();
+
+    if (Array.isArray(raw)) {
+      for (const entry of raw) {
+        const pid = entry?.player_id ?? entry?.playerId;
+        if (pid) map[pid] = entry?.stats ?? entry;
+      }
+    } else if (raw && typeof raw === "object") {
+      for (const [pid, entry] of Object.entries(raw)) {
+        map[pid] = (entry as any)?.stats ?? entry;
+      }
+    }
+  } catch {
+    // Projections are a nice-to-have — skip silently on failure.
+  }
+  return map;
+}
+
+function sleeperProjectedPoints(proj: any, scoringFormat: string): number {
+  if (!proj) return 0;
+  const val =
+    scoringFormat === "PPR"
+      ? proj.pts_ppr ?? proj.pts_half_ppr ?? proj.pts_std
+      : scoringFormat === "Half-PPR"
+      ? proj.pts_half_ppr ?? proj.pts_ppr ?? proj.pts_std
+      : proj.pts_std ?? proj.pts_half_ppr ?? proj.pts_ppr;
+  return Number(val ?? 0);
+}
+
 function buildSleeperPlayers(
   playerIds: string[],
   starterIds: string[],
   pointsMap: Record<string, number>,
   playersMeta: any,
-  liveMap: Record<string, LiveTeamStatus>
+  liveMap: Record<string, LiveTeamStatus>,
+  projMap: Record<string, any>,
+  scoringFormat: string
 ): RosterPlayer[] {
   const starterSet = new Set(starterIds);
   const list: RosterPlayer[] = playerIds.map((id) => {
@@ -93,6 +149,7 @@ function buildSleeperPlayers(
       position: meta?.position ?? "-",
       proTeam,
       points: Number((pointsMap[id] ?? 0).toFixed(2)),
+      projectedPoints: Number(sleeperProjectedPoints(projMap[id], scoringFormat).toFixed(2)),
       isStarter,
       slot: isStarter ? meta?.position ?? "-" : "Bench",
       liveStatus: liveMap[proTeam],
@@ -137,7 +194,7 @@ async function getSleeperMatchup(
     week = stateRes.ok ? (await stateRes.json())?.week ?? 1 : 1;
   }
 
-  const [rostersRes, matchupsRes, playersRes, usersRes] = await Promise.all([
+  const [rostersRes, matchupsRes, playersRes, usersRes, leagueRes] = await Promise.all([
     fetch(`https://api.sleeper.app/v1/league/${leagueId}/rosters`),
     fetch(`https://api.sleeper.app/v1/league/${leagueId}/matchups/${week}`),
     // Sleeper's full player database rarely changes — cache it for a day
@@ -146,6 +203,7 @@ async function getSleeperMatchup(
       next: { revalidate: 86400 },
     }),
     fetch(`https://api.sleeper.app/v1/league/${leagueId}/users`),
+    fetch(`https://api.sleeper.app/v1/league/${leagueId}`),
   ]);
 
   if (!rostersRes.ok || !playersRes.ok) {
@@ -162,6 +220,13 @@ async function getSleeperMatchup(
     return { status: "error", errorMessage: "Couldn't find your roster in this league." };
   }
 
+  const league = leagueRes.ok ? await leagueRes.json() : null;
+  const season = league?.season ?? String(new Date().getFullYear());
+  const recValue = league?.scoring_settings?.rec ?? 0;
+  const scoringFormat = recValue >= 1 ? "PPR" : recValue > 0 ? "Half-PPR" : "Standard";
+
+  const projMap = await getSleeperProjections(season, week!);
+
   let matchups: any[] = [];
   if (matchupsRes.ok) {
     matchups = await matchupsRes.json();
@@ -176,7 +241,9 @@ async function getSleeperMatchup(
     myMatchup?.starters ?? myRoster.starters ?? [],
     myMatchup?.players_points ?? {},
     players,
-    liveMap
+    liveMap,
+    projMap,
+    scoringFormat
   );
 
   let opponent: OpponentInfo = null;
@@ -195,7 +262,9 @@ async function getSleeperMatchup(
           oppMatchup.starters ?? [],
           oppMatchup.players_points ?? {},
           players,
-          liveMap
+          liveMap,
+          projMap,
+          scoringFormat
         );
 
         let teamName = "Opponent";
@@ -210,6 +279,7 @@ async function getSleeperMatchup(
         opponent = {
           teamName,
           totalPoints: sumStarterPoints(oppPlayers),
+          projectedPoints: sumStarterProjected(oppPlayers),
           players: oppPlayers,
         };
       }
@@ -220,6 +290,7 @@ async function getSleeperMatchup(
     status: "ok",
     week: week ?? 1,
     myPoints: sumStarterPoints(myPlayers),
+    myProjectedPoints: sumStarterProjected(myPlayers),
     players: myPlayers,
     opponent,
   };
@@ -238,6 +309,11 @@ function buildEspnPlayers(
     const statLine = Array.isArray(player?.stats)
       ? player.stats.find((s: any) => s.scoringPeriodId === week && s.statSourceId === 0)
       : null;
+    // statSourceId 1 = ESPN's own projection for this player/week —
+    // already sitting in the same stats array we use for actuals.
+    const projStatLine = Array.isArray(player?.stats)
+      ? player.stats.find((s: any) => s.scoringPeriodId === week && s.statSourceId === 1)
+      : null;
 
     const proTeam = ESPN_PRO_TEAM[player?.proTeamId] ?? "FA";
 
@@ -247,6 +323,7 @@ function buildEspnPlayers(
       position: ESPN_POSITION[player?.defaultPositionId] ?? "-",
       proTeam,
       points: Number((statLine?.appliedTotal ?? 0).toFixed(2)),
+      projectedPoints: Number((projStatLine?.appliedTotal ?? 0).toFixed(2)),
       isStarter,
       slot: ESPN_LINEUP_SLOT[slotId] ?? (isStarter ? "FLEX" : "Bench"),
       liveStatus: liveMap[proTeam],
@@ -349,6 +426,7 @@ async function getEspnMatchup(
         opponent = {
           teamName,
           totalPoints: sumStarterPoints(oppPlayers),
+          projectedPoints: sumStarterProjected(oppPlayers),
           players: oppPlayers,
         };
       }
@@ -359,6 +437,7 @@ async function getEspnMatchup(
     status: "ok",
     week,
     myPoints: sumStarterPoints(myPlayers),
+    myProjectedPoints: sumStarterProjected(myPlayers),
     players: myPlayers,
     opponent,
   };
