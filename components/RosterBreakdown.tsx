@@ -14,6 +14,7 @@ function redZoneLabel(situationText?: string): string {
 export default function RosterBreakdown({ leagueRowId }: { leagueRowId: string }) {
   const [open, setOpen] = useState(true);
   const [loading, setLoading] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const [loaded, setLoaded] = useState(false);
   const [week, setWeek] = useState<number | null>(null);
   const [myPoints, setMyPoints] = useState(0);
@@ -22,9 +23,13 @@ export default function RosterBreakdown({ leagueRowId }: { leagueRowId: string }
   const [error, setError] = useState<string | null>(null);
   const [headToHeadOpen, setHeadToHeadOpen] = useState(false);
 
-  async function loadRoster() {
-    setLoading(true);
-    setError(null);
+  async function loadRoster(silent = false) {
+    if (silent) {
+      setRefreshing(true);
+    } else {
+      setLoading(true);
+      setError(null);
+    }
     try {
       const res = await fetch(`/api/fantasy/roster?id=${leagueRowId}`);
       const body: RosterResponse = await res.json();
@@ -34,13 +39,17 @@ export default function RosterBreakdown({ leagueRowId }: { leagueRowId: string }
         setPlayers(body.players);
         setOpponent(body.opponent);
         setLoaded(true);
-      } else {
+        if (!silent) setError(null);
+      } else if (!silent) {
+        // A background refresh that fails quietly keeps showing the last
+        // good data rather than replacing it with an error banner.
         setError(body.errorMessage);
       }
     } catch {
-      setError("Couldn't load the player breakdown.");
+      if (!silent) setError("Couldn't load the player breakdown.");
     } finally {
-      setLoading(false);
+      if (silent) setRefreshing(false);
+      else setLoading(false);
     }
   }
 
@@ -50,6 +59,21 @@ export default function RosterBreakdown({ leagueRowId }: { leagueRowId: string }
     loadRoster();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [leagueRowId]);
+
+  // Auto-refresh every 30s while this card's breakdown is expanded, so
+  // red-zone status and live scoring stay current without a manual
+  // refresh. Skips the tick (rather than fetching in the background)
+  // when the browser tab isn't active, so backgrounded tabs don't keep
+  // polling unnecessarily.
+  useEffect(() => {
+    if (!open) return;
+    const interval = setInterval(() => {
+      if (document.hidden) return;
+      loadRoster(true);
+    }, 30000);
+    return () => clearInterval(interval);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, leagueRowId]);
 
   function handleToggle() {
     const next = !open;
@@ -69,7 +93,15 @@ export default function RosterBreakdown({ leagueRowId }: { leagueRowId: string }
         onClick={handleToggle}
         className="focus-ring flex w-full items-center justify-between text-xs font-semibold text-chalk-500 transition-colors hover:text-chalk-100"
       >
-        <span>Week {week ?? "..."} matchup</span>
+        <span className="flex items-center gap-1.5">
+          Week {week ?? "..."} matchup
+          {refreshing && (
+            <span
+              className="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-lights-500"
+              title="Refreshing..."
+            />
+          )}
+        </span>
         {open ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
       </button>
 
