@@ -33,6 +33,7 @@ export type RosterPlayer = {
   position: string;
   proTeam: string;
   points: number;
+  projectedPoints: number;
   isStarter: boolean;
   slot: string;
   liveStatus?: LiveTeamStatus;
@@ -41,6 +42,7 @@ export type RosterPlayer = {
 export type OpponentInfo = {
   teamName: string;
   totalPoints: number;
+  projectedPoints: number;
   players: RosterPlayer[];
 } | null;
 
@@ -49,6 +51,7 @@ export type RosterResponse =
       status: "ok";
       week: number;
       myPoints: number;
+      myProjectedPoints: number;
       players: RosterPlayer[];
       opponent: OpponentInfo;
     }
