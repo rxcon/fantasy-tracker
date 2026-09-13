@@ -1,8 +1,9 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import Link from "next/link";
 import { createClient } from "@/utils/supabase/client";
-import { Plus, LogOut, RefreshCw, ClipboardList } from "lucide-react";
+import { Plus, LogOut, RefreshCw, ClipboardList, Trophy } from "lucide-react";
 import LeagueCard, { SkeletonCard } from "./LeagueCard";
 import AddLeagueModal from "./AddLeagueModal";
 import type { TeamResult } from "@/utils/types";
@@ -61,6 +62,13 @@ export default function Dashboard({ email }: { email: string }) {
           </div>
 
           <div className="flex items-center gap-2">
+            <Link
+              href="/scoreboard"
+              className="focus-ring flex items-center gap-2 rounded-lg border border-field-700 px-3 py-2 text-sm font-semibold text-chalk-100 transition-colors hover:bg-field-800"
+            >
+              <Trophy className="h-4 w-4 text-lights-500" />
+              Scoreboard
+            </Link>
             <button
               onClick={() => loadLeagues(true)}
               disabled={refreshing}
