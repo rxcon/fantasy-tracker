@@ -18,6 +18,7 @@ export default function RosterBreakdown({ leagueRowId }: { leagueRowId: string }
   const [loaded, setLoaded] = useState(false);
   const [week, setWeek] = useState<number | null>(null);
   const [myPoints, setMyPoints] = useState(0);
+  const [myProjectedPoints, setMyProjectedPoints] = useState(0);
   const [players, setPlayers] = useState<RosterPlayer[]>([]);
   const [opponent, setOpponent] = useState<OpponentInfo>(null);
   const [error, setError] = useState<string | null>(null);
@@ -36,6 +37,7 @@ export default function RosterBreakdown({ leagueRowId }: { leagueRowId: string }
       if (body.status === "ok") {
         setWeek(body.week);
         setMyPoints(body.myPoints);
+        setMyProjectedPoints(body.myProjectedPoints);
         setPlayers(body.players);
         setOpponent(body.opponent);
         setLoaded(true);
@@ -130,11 +132,14 @@ export default function RosterBreakdown({ leagueRowId }: { leagueRowId: string }
                         You
                       </p>
                       <p
-                        className={`font-display text-2xl ${
+                        className={`font-display text-2xl leading-tight ${
                           iAmWinning ? "text-lights-500" : "text-chalk-100"
                         }`}
                       >
                         {myPoints.toFixed(1)}
+                      </p>
+                      <p className="text-[10px] text-chalk-500">
+                        proj {myProjectedPoints.toFixed(1)}
                       </p>
                     </div>
                     <span className="mx-2 shrink-0 text-[10px] font-bold text-chalk-500">
@@ -145,11 +150,14 @@ export default function RosterBreakdown({ leagueRowId }: { leagueRowId: string }
                         {opponent.teamName}
                       </p>
                       <p
-                        className={`font-display text-2xl ${
+                        className={`font-display text-2xl leading-tight ${
                           !iAmWinning ? "text-lights-500" : "text-chalk-100"
                         }`}
                       >
                         {opponent.totalPoints.toFixed(1)}
+                      </p>
+                      <p className="text-[10px] text-chalk-500">
+                        proj {opponent.projectedPoints.toFixed(1)}
                       </p>
                     </div>
                   </div>
@@ -221,25 +229,39 @@ function HeadToHead({
               <span className="truncate text-xs text-chalk-100">
                 {mine?.name ?? "—"}
               </span>
-              <span
-                className={`font-display text-base shrink-0 ${
-                  mineHigher ? "text-lights-500" : "text-chalk-500"
-                }`}
-              >
-                {(mine?.points ?? 0).toFixed(1)}
-              </span>
+              <div className="shrink-0 text-right">
+                <span
+                  className={`block font-display text-base leading-tight ${
+                    mineHigher ? "text-lights-500" : "text-chalk-500"
+                  }`}
+                >
+                  {(mine?.points ?? 0).toFixed(1)}
+                </span>
+                {mine && (
+                  <span className="block text-[9px] leading-tight text-chalk-500">
+                    proj {mine.projectedPoints.toFixed(1)}
+                  </span>
+                )}
+              </div>
             </div>
             <span className="shrink-0 rounded-full bg-field-700/60 px-1.5 py-0.5 text-[10px] font-semibold text-chalk-300">
               {slotLabel}
             </span>
             <div className="flex items-center gap-2 truncate">
-              <span
-                className={`font-display text-base shrink-0 ${
-                  !mineHigher ? "text-lights-500" : "text-chalk-500"
-                }`}
-              >
-                {(theirs?.points ?? 0).toFixed(1)}
-              </span>
+              <div className="shrink-0 text-left">
+                <span
+                  className={`block font-display text-base leading-tight ${
+                    !mineHigher ? "text-lights-500" : "text-chalk-500"
+                  }`}
+                >
+                  {(theirs?.points ?? 0).toFixed(1)}
+                </span>
+                {theirs && (
+                  <span className="block text-[9px] leading-tight text-chalk-500">
+                    proj {theirs.projectedPoints.toFixed(1)}
+                  </span>
+                )}
+              </div>
               <span className="truncate text-xs text-chalk-100">
                 {theirs?.name ?? "—"}
               </span>
@@ -280,9 +302,14 @@ function PlayerGroup({ label, players }: { label: string; players: RosterPlayer[
                   </span>
                 )}
               </div>
-              <span className="shrink-0 font-display text-lg text-lights-500">
-                {p.points.toFixed(1)}
-              </span>
+              <div className="shrink-0 text-right">
+                <span className="block font-display text-lg leading-tight text-lights-500">
+                  {p.points.toFixed(1)}
+                </span>
+                <span className="block text-[9px] leading-tight text-chalk-500">
+                  proj {p.projectedPoints.toFixed(1)}
+                </span>
+              </div>
             </div>
           );
         })}
